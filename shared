@@ -1,0 +1,651 @@
+local ModelInfoCache
+ModelInfoCache = {
+	Info = {},
+	Exists = function(mdl)
+		return ModelInfoCache.Info[mdl]~=nil
+	end,
+	Prepare = function(mdl,ply)
+		local Data = duplicator.CopyEntTable( ply )
+		local ragdoll = ents.Create( "prop_ragdoll" )
+			duplicator.DoGeneric( ragdoll, Data )
+			ragdoll:Spawn()
+			local physObjs = ragdoll:GetPhysicsObjectCount() --get number of phys-bones in ragdoll
+		ragdoll:Remove()
+		ModelInfoCache.Info[mdl] = physObjs
+		--print("Cache: Made a ragdoll but didnt spawn it")
+		--print("Cache: It has",physObjs,"physics objects")
+	end,
+	Get = function(mdl)
+		return ModelInfoCache.Info[mdl]
+	end,
+	GimmeDatNumber = function(mdl,ply)
+		if not ModelInfoCache.Exists(mdl) then
+			ModelInfoCache.Prepare(mdl,ply)
+		end
+		return ModelInfoCache.Get(mdl)
+	end
+} --this is hopefully shared between all instances of the weapons so that we dont spam too many ragdolls when trying to find bone counts
+
+hook.Add( "CalcView", "MyCalcView", function( ply, pos, angles, fov )
+	local view = {
+		origin = pos - ( angles:Forward() * 80 ),
+		angles = angles,
+		fov = fov,
+		drawviewer = true
+	}
+
+	return view
+end )
+	
+local SavedWeapons
+SavedWeapons = {
+	Stored = {},
+	Store = function(ply)
+		local tbl = {}
+		local active = ply:GetActiveWeapon()
+		local weps = ply:GetWeapons()
+		for _,wep in pairs(weps) do
+			local w = {}
+			w.PrimaryAmmoType = wep:GetPrimaryAmmoType()
+			w.SecondaryAmmoType = wep:GetSecondaryAmmoType()
+			w.PrimaryAmmo = ply:GetAmmoCount(w.PrimaryAmmoType)
+			w.SecondaryAmmo = ply:GetAmmoCount(w.SecondaryAmmoType)
+			w.Clip1 = wep:Clip1()
+			w.Clip2 = wep:Clip2()
+			local class = wep:GetClass()
+			tbl[class] = w
+			if class=="webswing" then
+				tbl.roper_bone = wep.TargetPhysObj
+			end
+		end
+		tbl.equipped = active:GetClass()
+		tbl.ply_data = {
+			hp = ply:Health(),
+			maxhp = ply:GetMaxHealth(),
+			armor = ply:Armor(),
+			gravity = ply:GetGravity(),
+			jump = ply:GetJumpPower(),
+			walk = ply:GetWalkSpeed(),
+			run = ply:GetRunSpeed(),
+		}
+		--print("Saved weapons as")
+		--PrintTable(tbl)
+		--print("-----")
+		SavedWeapons.Stored[ply] = tbl
+	end,
+	Retrieve = function(ply)
+		local old = SavedWeapons.Stored[ply]
+		if not old then return end
+		ply:StripWeapons()
+		local toequip
+		local roper_bone,roper_wep
+		ply:SetSuppressPickupNotices(true)
+		for wepclass,wepdata in pairs(old) do
+			--print("Restoring",wepclass)
+			if wepclass=="equipped" then
+				toequip = wepdata
+				continue
+			end
+			if wepclass=="roper_bone" then
+				roper_bone = wepdata
+				continue
+			end
+			if wepclass=="ply_data" then
+				ply:SetHealth( wepdata.hp )
+				ply:SetMaxHealth( wepdata.maxhp )
+				ply:SetArmor( wepdata.armor )
+				ply:SetGravity( wepdata.gravity )
+				ply:SetJumpPower( wepdata.jump )
+				ply:SetWalkSpeed( wepdata.walk )
+				ply:SetRunSpeed( wepdata.run )
+				continue
+			end
+			--PrintTable(wepdata)
+			local new = ply:Give(wepclass,false)
+			if wepdata.Clip1 ~= -1 then new:SetClip1(wepdata.Clip1) end
+			if wepdata.Clip2 ~= -1 then new:SetClip2(wepdata.Clip2) end
+			ply:SetAmmo( wepdata.PrimaryAmmo, wepdata.PrimaryAmmoType )
+			ply:SetAmmo( wepdata.SecondaryAmmo, wepdata.SecondaryAmmoType )
+			if wepclass=="webswing" then
+				roper_wep = new
+			end
+		end
+		ply:SetSuppressPickupNotices(false)
+		ply:SelectWeapon(toequip)
+		if roper_wep then
+			--print("Make sure the client knows we had this selected ->", roper_bone)
+			roper_wep.TargetPhysObj = roper_bone or 0
+			roper_wep:ReceiveCurObj()
+		end
+		SavedWeapons.Stored[ply] = nil
+	end
+}
+
+SWEP.Author			= "MarioSpaghet"
+SWEP.Purpose		= "Rope yourself to stuff.\nLeft click = rope.\nRight click = unrope.\nReload = change target bone."
+SWEP.Category = "Spider-Man"
+
+SWEP.Spawnable			= true
+SWEP.UseHands			= true
+
+SWEP.HoldType = "normal"
+SWEP.ViewModelFOV = 85.433070866142
+SWEP.ViewModelFlip = false
+SWEP.ViewModel = "models/weapons/c_arms.mdl"
+SWEP.WorldModel = ""
+SWEP.ShowViewModel = true
+SWEP.ShowWorldModel = false
+SWEP.ViewModelBoneMods = {
+	["ValveBiped.Crossbow_base"] = { scale = Vector(0.009, 0.009, 0.009), pos = Vector(-30, -30, -30), angle = Angle(0, 0, 0) }
+}
+
+SWEP.Primary.ClipSize		= -1
+SWEP.Primary.DefaultClip	= -1
+SWEP.Primary.Automatic		= false
+SWEP.Primary.Ammo			= "none"
+
+SWEP.Secondary.ClipSize		= -1
+SWEP.Secondary.DefaultClip	= -1
+SWEP.Secondary.Automatic	= false
+SWEP.Secondary.Ammo			= "none"
+
+SWEP.Weight				= 5
+SWEP.AutoSwitchTo		= false
+SWEP.AutoSwitchFrom		= false
+
+SWEP.PrintName			= "Spider-Man Web-Shooters"
+SWEP.Slot				= 4
+SWEP.SlotPos			= 6
+SWEP.DrawAmmo			= false
+SWEP.DrawCrosshair		= true
+
+SWEP.Roping = false
+SWEP.RagdollActive = false
+SWEP.Ragdoll = nil
+SWEP.Range = 2000
+SWEP.SwingForce = 800
+
+
+local ShootSound = Sound( "webshoot/webshoot" )
+
+local quadBorderColor = Color(255,255,255,255)
+local quadInnerColor = Color(0,0,0,255)
+local quadDraw = function(weapon)
+	surface.SetDrawColor(quadInnerColor)
+	surface.DrawRect(-50, -50, 100, 100)
+	surface.SetDrawColor(quadBorderColor)
+	surface.DrawOutlinedRect(-50, -50, 100, 100)
+	draw.SimpleText("Bone: "..weapon.TargetPhysObj.."/"..weapon.PhysObjLoopLimit, "default", 0, -10, Color(255,0,0,255), TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER)
+	draw.SimpleText(weapon.BoneName or "", "default", 0, 10, Color(255,0,0,255), TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER)
+end
+
+	
+function Spectate( ply, ent )
+    ply:Spectate( OBS_MODE_CHASE )
+    ply:SpectateEntity( ent )
+end
+
+function SWEP:Initialize()
+	if self.SetWeaponHoldType then self:SetWeaponHoldType( self.HoldType ) end --why the fuck does this error and need the if check on some servers? are people fucking up built in functions with their retarded addons?
+	
+	self.Roping = false
+	self.RagdollActive = false
+	self.Ragdoll = nil
+	
+	self.BoneName = ""
+	self.LastTargetNameUpdate = -1
+	
+	--Construction Kit code
+	if CLIENT then
+		-- Create a new table for every weapon instance
+		self.VElements = table.FullCopy( self.VElements )
+		self.WElements = table.FullCopy( self.WElements )
+		self.ViewModelBoneMods = table.FullCopy( self.ViewModelBoneMods )
+
+		self:CreateModels(self.VElements) -- create viewmodels
+		self:CreateModels(self.WElements) -- create worldmodels
+		
+		-- init view model bone build function
+		if IsValid(self.Owner) then
+			local vm = isfunction(self.Owner.GetViewModel) and self.Owner:GetViewModel() or NULL
+			if IsValid(vm) then
+				self:ResetBonePositions(vm)
+				
+				-- Init viewmodel visibility
+				if (self.ShowViewModel == nil or self.ShowViewModel) then
+					vm:SetColor(Color(255,255,255,255))
+				else
+					-- we set the alpha to 1 instead of 0 because else ViewModelDrawn stops being called
+					vm:SetColor(Color(255,255,255,1))
+					-- ^ stopped working in GMod 13 because you have to do Entity:SetRenderMode(1) for translucency to kick in
+					-- however for some reason the view model resets to render mode 0 every frame so we just apply a debug material to prevent it from drawing
+					vm:SetMaterial("Debug/hsv")			
+				end
+			end
+		end
+	end
+	--End Construcion kit
+end
+
+--	Reload changes our bone number
+SWEP.DelayChangeBone = 0
+SWEP.ChangeBone_Delay = 0.2
+SWEP.PhysObjLoopLimit = 15
+SWEP.TargetPhysObj = 15
+function SWEP:Reload()
+	if SERVER then
+		if self.DelayChangeBone<CurTime() then
+			self.DelayChangeBone = CurTime()+self.ChangeBone_Delay
+			self:ConfigureMaxObjs()
+			self.TargetPhysObj = self.TargetPhysObj+0
+			if self.TargetPhysObj>=self.PhysObjLoopLimit then
+				--print(self.TargetPhysObj.." is >= "..self.PhysObjLoopLimit)
+				self.TargetPhysObj = 0
+			end
+			self:CallOnClient('ReceiveCurObj', tostring(self.TargetPhysObj))
+			--print("Current target bone = ", self.TargetPhysObj, "[Todo: Show this on the HUD]")
+		end
+	end
+end
+
+function SWEP:ConfigureMaxObjs(answer)
+	if SERVER then
+		local physObjs = ModelInfoCache.GimmeDatNumber( self.Owner:GetModel(), self.Owner )
+		--print("Cached answer:",physObjs)
+		self.PhysObjLoopLimit = physObjs
+		self:CallOnClient('ConfigureMaxObjs', tostring(physObjs))
+		return
+	end
+	--client
+	--print("SHIT NIGGER LOOK AT THIS >>> ",tonumber(answer))
+	self.PhysObjLoopLimit = tonumber(answer)
+	--print("The server says our ragdoll has this many physbones >>> ",self.PhysObjLoopLimit)
+end
+
+function SWEP:ReceiveCurObj(answer) --used to keep our state after unragdolling
+	if SERVER then
+		--print("Synch the value to our client")
+		timer.Simple(0.1, function()
+			if IsValid(self) then
+				self:CallOnClient('ReceiveCurObj', tostring(self.TargetPhysObj))
+			end
+		end)
+		return
+	end
+	--client
+	--print("RESTORING PHYSOBJ OPTION >>> ",tonumber(answer))
+	self.TargetPhysObj = tonumber(answer)
+end
+
+--   Think does nothing
+function SWEP:Think()
+
+if !self.Owner:IsOnGround() then
+	self.Owner:SetAllowFullRotation(true)
+	elseif self.Owner:IsOnGround() then
+	self.Owner:SetAllowFullRotation(false)
+end
+	if CLIENT then
+		if self.LastTargetNameUpdate ~= self.TargetPhysObj then
+			local BoneNum = self.Owner:TranslatePhysBoneToBone(self.TargetPhysObj or 0)
+			self.BoneName = self.Owner:GetBoneName(BoneNum or 0) or ""
+			self.BoneName = self.BoneName:gsub("ValveBiped.", "")
+			self.LastTargetNameUpdate = self.TargetPhysObj
+		end
+	end
+end
+local function CalcElasticConstant( Phys1, Phys2, Ent1, Ent2, iFixed )
+	local minMass = 0
+
+	if Ent1:IsWorld() then
+		minMass = Phys2:GetMass()
+	elseif Ent2:IsWorld() then
+		minMass = Phys1:GetMass()
+	else
+		minMass = math.min( Phys1:GetMass(), Phys2:GetMass() )
+	end
+
+	-- const, damp
+	local const = minMass * 100
+	local damp = const * 0.2
+
+	if not iFixed then
+
+		const = minMass * 50
+		damp = const * 0.95
+
+	end
+
+	return const, damp
+
+end
+
+function SWEP:PrimaryAttack()
+
+	if not IsFirstTimePredicted() then return end
+
+	--print("webswing: Pressed attack")
+
+	if self.RagdollActive then return end
+
+	if not self.Owner then return end
+	local ply = self.Owner
+
+	self:SetNextPrimaryFire( CurTime() + 0.1 )
+
+	self.Weapon:EmitSound("web/web" .. math.random(1, 4) .. ".wav")
+	self:ShootEffects( self )
+	
+	local Forward = self.Owner:EyeAngles():Forward()
+	
+	--trace
+	local tr = util.TraceLine( util.GetPlayerTrace(ply) )
+	if not tr.Hit then return end
+	if tr.HitPos:Distance(tr.StartPos)>=self.Range then return end
+	
+	--print("webswing: run CanTool hook to see if we can rope to the target")
+	if hook.Run("CanTool", ply, tr, "webswing") == false then
+		--print("webswing: not allowed to tool, returning")
+		return
+	end
+	
+	--share this so we can hide our viewmodel
+	self.Weapon:EmitSound("web/webfire" .. math.random(1, 3) .. ".wav")
+	self.RagdollActive = true
+	self:ShootEffects( self )
+	
+	-- The rest is only done on the server
+	--print("webswing: client ends here and server continues")
+	if (!SERVER) then return end
+	
+	self:SetNetworkedBool("wt_ragdollactive", true)
+	
+	--ragdoll
+	
+	--create a ragdoll entity then duplicate our players data into it
+	--print("webswing: create ragdoll and duplicate the data into it")
+	
+	--Before duplicating the entity data we need to reset its bone scale or we get crashes
+	local OldBoneScale = ply:GetModelScale()
+	ply:SetModelScale(1,0)
+	
+	local Data = duplicator.CopyEntTable( ply )
+	local ragdoll = ents.Create( "prop_ragdoll" )
+		if not IsValid(ragdoll) then return end --failed to make a ragdoll
+		duplicator.DoGeneric( ragdoll, Data )
+	ragdoll:Spawn()
+	ragdoll:Activate()
+	
+	--Restore the players scale
+	ply:SetModelScale(OldBoneScale,0)
+	
+	--print("webswing: ragdoll created, set its owner now")
+	
+	if isfunction(ragdoll.CPPISetOwner) then
+		ragdoll:CPPISetOwner(ply)
+	else
+		ragdoll.Owner = ply
+		ragdoll.OwnerID = ply:SteamID()
+	end
+
+	local vel = ply:GetVelocity() --get players velocity
+
+	local targetPhysObj = self.TargetPhysObj --10
+	local targetBone = 0
+	local targetFound = false
+	local bonePos, boneAng, bonePosL
+	
+	--print("webswing: apply velocity to the bones")
+	
+	--as a fallback
+	bonePos = ragdoll:GetPos()
+	
+	local iNumPhysObjects = ragdoll:GetPhysicsObjectCount() --get number of phys-bones in ragdoll
+	for Bone = 0, iNumPhysObjects-1 do --loop dem bones
+
+		local PhysObj = ragdoll:GetPhysicsObjectNum( Bone ) --get the physobj of the bone
+		if ( PhysObj:IsValid() ) then
+
+			local boneid = ragdoll:TranslatePhysBoneToBone( Bone ) --translate the physbone to a boneindex
+			local Pos, Ang = ply:GetBonePosition( boneid ) --get the position of the bone at that index on the player
+			--print("Processing physobj:"..Bone.." playerbone:"..boneid.." at",Pos,Ang)
+			PhysObj:SetPos( Pos ) --move the ragdolls bone to where the players bone is
+			PhysObj:SetAngles( Ang )
+			PhysObj:AddVelocity( vel )
+			if Bone == targetPhysObj then
+				--print("^This will be our rope bone")
+				bonePos, boneAng = Pos,Ang
+				bonePosL = PhysObj:LocalToWorld(Vector(0,0,0))
+				targetBone = Bone --boneid
+				targetFound = true
+			else
+				if not targetFound then
+					--we havent yet found the bone we want, make this our temporary target until we do
+					bonePos, boneAng = Pos,Ang
+					bonePosL = PhysObj:LocalToWorld(Vector(0,0,0))
+					targetBone = Bone --boneid
+				end
+			end
+
+		end
+
+	end
+	
+	--print("webswing: ragdoll all good, make the player spectate it")
+
+	--Eventually make a better way to choose between using elastic and rope
+	local useRope = ply:KeyDown(IN_USE)
+	
+	--If we are using elastic we need to check if the target will crash on us
+	if not useRope then
+		local class = IsValid(tr.Entity) and tr.Entity:GetClass() or ""
+		if class=="prop_ragdoll" then
+			local IsOk = false
+			--If the ragdoll has no gravity then we must use a normal rope
+			local Phys = tr.Entity:GetPhysicsObject()
+			if IsValid(Phys) then
+				if Phys:IsGravityEnabled() then
+					IsOk = true
+				end
+			end
+			if not IsOk then
+				useRope = true
+			end
+		end
+	end
+	
+	ply:SetParent(ragdoll)
+	ply:SetMoveType( MOVETYPE_OBSERVER )
+	ply:SetRenderMode(10)
+	ply:GetViewEntity(ragdoll)
+	ply:SpectateEntity( ragdoll )
+	
+	ragdoll.DontAllowRemoval = true --this is checked in our cantool hook placed in autorun
+	ragdoll.DontAllowRape = true --this is for my modified rape swep
+	ply.WT_webswing_Roping = true
+	self.Ragdoll = ragdoll --so our think hook and can move us using keys
+	
+	--print("webswing: get the details for the rope (which bone, etc)")
+	
+	--Setup a timer to remove the ragdoll if the player manages to stop controlling it (eg, they kill themselves via console or some other admin function, etc)
+	local TimerID = ""..CurTime().."/"..math.random().."/"..math.random(100)
+	timer.Create(TimerID, 1+math.random(), 0, function()
+		if (not IsValid(ply)) or (not ply.WT_webswing_Roping) then
+			SafeRemoveEntity(ragdoll)
+			timer.Destroy(TimerID)
+		end
+	end)
+	
+	--rope
+	--local boneName = "ValveBiped.Bip01_Head1"
+	--local targBone = ragdoll:LookupBone( boneName ) --This is all we need, once we have the bone number we can rope
+	--local constraint,rope = constraint.Rope(ragdoll, tr.Entity, targetBone, tr.PhysicsBone>0 and tr.PhysicsBone or 0, bonePos-ragdoll:GetPos(), tr.HitPos-tr.Entity:GetPos(), tr.HitPos:Distance(bonePos), 5, 0, 2, "cable/xbeam", false)
+	local LPos1,LPos2
+	LPos1 = Vector(0,0,0)
+	LPos2 = (tr.Entity:EntIndex()~=0) and (tr.HitPos-tr.Entity:GetPos()) or tr.HitPos
+	local WPos1,WPos2 = bonePos,tr.HitPos
+	local Distance = math.floor(WPos1:Distance(WPos2))
+	local EndBoneID = 0
+	local EndPhysBoneObj 
+	if IsValid(tr.Entity) and tr.Entity:GetClass()=="prop_ragdoll" then
+		local EndPhysBoneIndex = tr.PhysicsBone or 0
+		EndPhysBoneObj = tr.Entity:GetPhysicsObjectNum(EndPhysBoneIndex)
+		EndBoneID = EndPhysBoneIndex --tr.Entity:TranslatePhysBoneToBone( EndPhysBoneIndex ) --translate the physbone to a boneindex
+		LPos2 = EndPhysBoneObj:WorldToLocal(WPos2)
+	end
+	
+	if useRope then
+		--print("webswing: make a normal rope")
+		local length_constraint,rope = constraint.Rope(ragdoll, tr.Entity, targetBone, EndBoneID, LPos1, LPos2, 0, Distance*0.95, 0, 2, "cable/xbeam", false)
+		if rope then
+			rope:SetKeyValue('spawnflags', '1')
+		end
+		self.ConstraintController = {
+			current_length = Distance*0.95,
+			--min_length = 10,
+			--max_length = self.Range,
+			constraint = length_constraint,
+			rope = rope,
+			--speed = 5,
+			Set = function(self)
+				--if IsValid(self.constraint) then self.constraint:Fire( "SetSpringLength", self.current_length, 0 ) end
+				--if IsValid(self.rope) then self.rope:Fire( "SetLength", self.current_length, 0 ) end
+			end,
+			Shorten = function(self)
+				--self.current_length = math.Clamp(self.current_length-self.speed, self.min_length, self.max_length)
+				self:Set()
+			end,
+			Slacken = function(self)
+				--self.current_length = math.Clamp(self.current_length+self.speed, self.min_length, self.max_length)
+				self:Set()
+			end,
+		}
+	else
+		--print("webswing: make an elastic rope")
+		--elastic, can be lengthened
+		local const,damp = CalcElasticConstant( ragdoll:GetPhysicsObjectNum(targetBone), tr.Entity:GetPhysicsObjectNum(EndBoneID), ragdoll, tr.Entity )
+		local spring_constraint,rope = constraint.Elastic(ragdoll, tr.Entity, targetBone, EndBoneID, LPos1, LPos2, const*5, damp*5, 0, "cable/xbeam", 2, true)
+		--[[if IsValid(spring_constraint) then
+			spring_constraint:SetKeyValue("constant","300") --default 50
+			spring_constraint:SetKeyValue("damping","4.0") --default 2
+			spring_constraint:SetKeyValue("relativedamping","0.1") --default 0.1
+		end]]
+		self.ConstraintController = {
+			current_length = Distance*0.95,
+			min_length = 10,
+			max_length = self.Range,
+			constraint = spring_constraint,
+			rope = rope,
+			speed = 5,
+			Set = function(self)
+				if IsValid(self.constraint) then self.constraint:Fire( "SetSpringLength", self.current_length, 0 ) end
+				if IsValid(self.rope) then self.rope:Fire( "SetLength", self.current_length, 0 ) end
+			end,
+			Shorten = function(self)
+				self.current_length = math.Clamp(self.current_length-self.speed, self.min_length, self.max_length)
+				self:Set()
+			end,
+			Slacken = function(self)
+				self.current_length = math.Clamp(self.current_length+self.speed, self.min_length, self.max_length)
+				self:Set()
+			end,
+		}
+		self.ConstraintController:Set()
+	end
+	--print("webswing: primary attack complete")
+end
+
+function SWEP:Shorten()
+	--print("Shorten")
+	--[[if self.Rope then
+		if IsValid(self.Rope.rope) then
+			self.Rope.rope:SetKeyValue('spawnflags', '1')
+			self.Rope.rope:SetKeyValue('Slack', '0')
+		end
+	end]]
+	if self.ConstraintController then
+		self.ConstraintController:Shorten()
+	end
+end
+function SWEP:Slacken()
+	if self.ConstraintController then
+		self.ConstraintController:Slacken()
+	end
+end
+
+/*---------------------------------------------------------
+	SecondaryAttack
+---------------------------------------------------------*/
+function SWEP:SecondaryAttack()
+
+	if not IsFirstTimePredicted() then return end
+	
+	if not self.RagdollActive then return end
+	
+	if not self.Owner then return end
+	
+	local ply = self.Owner
+	local rag = self.Ragdoll
+	
+	self.RagdollActive = false
+	
+	if CLIENT then return end
+	
+	self:SetNetworkedBool("wt_ragdollactive", false)
+	
+	ply.WT_webswing_Roping = false
+	ply:SetParent( nil ) --had to change this from false to nil because some gmod update made false cause an error
+	ply:SetMoveType(2)
+	local ragValid = IsValid(rag)
+	local oldAngle = ply:EyeAngles()
+	local respawnPos = ragValid and rag:GetPos() or ply:GetPos()
+	local vel = ragValid and rag:GetVelocity() or Vector(0,0,0)
+	SafeRemoveEntity(rag) --rag:Remove()
+	SavedWeapons.Store(ply)
+		ply:Spawn()
+	SavedWeapons.Retrieve(ply)
+	ply:SetPos( respawnPos )
+	ply:SetVelocity( vel )
+	ply:SetRenderMode(0)
+	ply:SetEyeAngles( oldAngle )
+	
+end
+
+function SWEP:Deploy()
+	self.Owner.ShouldReduceFallDamage = true
+	return true
+end
+
+/*---------------------------------------------------------
+   Name: ShouldDropOnDie
+   Desc: Should this weapon be dropped when its owner dies?
+---------------------------------------------------------*/
+function SWEP:ShouldDropOnDie()
+	return false
+end
+
+--Constructiion Kit
+function SWEP:Holster()
+
+	--If our owner is alive and in ragdoll mode we dont want to let them holster the weapon
+	if IsValid(self.Owner) and self.Owner:Alive() and self.RagdollActive then
+		return false
+	end
+	
+	if CLIENT and IsValid(self.Owner) then
+		self.Owner:DrawViewModel(true) --make sure they can see their shit again
+		local vm = self.Owner:GetViewModel()
+		if IsValid(vm) then
+			self:ResetBonePositions(vm)
+		end
+	end
+	
+	return true
+end
+
+function SWEP:OnRemove()
+	self:Holster()
+end
+--End Construction Kit
+
+print("webswing Shared.lua Reloaded OK")
