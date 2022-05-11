@@ -257,7 +257,7 @@ function SWEP:ConfigureMaxObjs(answer)
 		return
 	end
 	--client
-	--print("SHIT NIGGER LOOK AT THIS >>> ",tonumber(answer))
+	--print("SHIT LOOK AT THIS >>> ",tonumber(answer))
 	self.PhysObjLoopLimit = tonumber(answer)
 	--print("The server says our ragdoll has this many physbones >>> ",self.PhysObjLoopLimit)
 end
