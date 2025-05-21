@@ -1,0 +1,8 @@
+"UnlitGeneric"
+{
+    "$basetexture" "_rt_FullFrameFB"
+    "$pixshader" "agx_pixel_shader"
+    "$nocull" 1
+    "$vertexalpha" 1
+    "$vertexcolor" 1
+}

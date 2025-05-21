@@ -1,0 +1,200 @@
+// AGX Tonemapper Pixel Shader
+
+// Samplers
+sampler ScreenSampler : register(s0); // _rt_FullFrameFB
+
+// Constants
+static const float3x3 agx_matrix = {
+    {0.852665932839781, 0.133857368708237, 0.013616198190446},
+    {0.017141946408410, 0.980889636979891, 0.001927006217096},
+    {0.003695278017709, 0.031995603575089, 0.964251816917360}
+};
+
+static const float min_ev = -10.0;
+static const float max_ev = 6.5;
+static const float middle_grey = 0.18;
+
+// Pivot points for the curve, derived from AgX.py's generate_config.py
+// x_pivot = (log2(middle_grey) - min_ev) / (max_ev - min_ev)
+// For middle_grey = 0.18, log2(0.18) = -2.4739
+// x_pivot = (-2.4739 - (-10.0)) / (6.5 - (-10.0))
+// x_pivot = (10.0 - 2.4739) / 16.5 = 7.5261 / 16.5 = 0.456127
+// The subtask specifies x_pivot = 0.60606; This implies a different middle_grey or interpretation.
+// Let's use the provided x_pivot and y_pivot.
+static const float x_pivot = 0.60606; // Corresponds to roughly EV +0.1 at middle_grey 0.18 if max_ev is higher or min_ev is lower
+static const float y_pivot = 0.5;
+static const float slope_pivot = 2.0; // Corresponds to gamma 2.0 at the pivot
+
+// Curve power values from AgX.py, used in equation_hyperbolic
+static const float2 curve_power = float2(3.0, 3.25); // {P_low, P_high}
+
+// Helper Functions
+
+// Converts an open domain linear value to normalized log2 space [0, 1]
+float open_domain_to_normalized_log2(float linear_value) {
+    float log2_value = log2(max(1e-7, linear_value)); // Avoid log(0) or negative
+    return (log2_value - min_ev) / (max_ev - min_ev);
+}
+
+// Converts a normalized log2 space value [0, 1] back to open domain linear
+float normalized_log2_to_open_domain(float normalized_log_value) {
+    float log2_value = normalized_log_value * (max_ev - min_ev) + min_ev;
+    return exp2(log2_value);
+}
+
+// Sigmoid shaper term for the curve function from AgX.py (originally equation_s_curve_sqrt)
+// This is used to make the curve shape itself.
+// Renamed to equation_term to match subtask, implies it's part of equation_hyperbolic.
+float equation_term(float x, float p) {
+    // Original from AgX.py:
+    // y = sign(x) * pow(abs(x), p_curve)
+    // return y * rcp(pow(x_pivot, p_curve) * slope_pivot - pow(x_pivot, p_curve) + x_pivot);
+    // The subtask asks for equation_term and equation_hyperbolic separately.
+    // equation_term is likely just sign(x) * pow(abs(x), p)
+    return sign(x) * pow(abs(x), p);
+}
+
+// Hyperbolic curve function from AgX.py
+// This function creates the S-curve shape based on the term.
+float equation_hyperbolic(float x, float p_low, float p_high) {
+    // In AgX.py, this is part of equation_full_curve's logic,
+    // where it calculates y_low and y_high using equation_term (there called equation_s_curve_sqrt).
+    // It seems the intention is for this function to apply the terms and blend.
+
+    // Let's assume x is already (val - x_pivot)
+    // float term_low = equation_term(x, p_low);
+    // float term_high = equation_term(x, p_high);
+    // This function is not directly 1:1 with AgX.py's equation_hyperbolic.
+    // AgX.py's equation_hyperbolic is:
+    // y = (x * slope_pivot) / (1.0 + x * (slope_pivot - 1.0) / x_pivot) for x >= 0 and x <= x_pivot
+    // y = x_pivot + ((x - x_pivot) * (1.0 - x_pivot) * slope_pivot) / (pow(1.0 - x_pivot, 2.0) * slope_pivot + pow(x - x_pivot, 2.0) * (1.0 - slope_pivot)) for x > x_pivot
+    // This is complex. The subtask is simpler.
+
+    // The subtask's `equation_hyperbolic` and `equation_term` seem to be components of `equation_curve`.
+    // Let's assume `equation_hyperbolic` is meant to apply the core shaping logic
+    // using `equation_term` for the power function part.
+    // From generate_config.py's `equation_curve`:
+    // `y_low = sign(x) * pow(abs(x), power.x)`
+    // `y_high = sign(x) * pow(abs(x), power.y)`
+    // `y = lerp(y_low, y_high, smoothstep(0.0, 1.0, abs(x)))`
+    // `return y`
+    // Here, `x` is `val - x_pivot`.
+    // This seems to be what `equation_curve` should do, using `equation_term`.
+    // Let's define `equation_hyperbolic` as the actual blending if that's the intent.
+
+    // Based on the structure of `equation_full_curve` using `equation_curve`,
+    // it's more likely `equation_hyperbolic` is a misnomer from the prompt,
+    // or refers to the general family of curves.
+    // The actual curve function provided by the subtask is `equation_curve` and `equation_full_curve`.
+    // Let's assume `equation_hyperbolic` is the one that calls `equation_term` and does the LERP.
+    // This will be called by `equation_curve`.
+
+    float y_low = equation_term(x, p_low);
+    float y_high = equation_term(x, p_high);
+    return lerp(y_low, y_high, smoothstep(0.0, 1.0, abs(x)));
+}
+
+
+// Curve shaping function incorporating the hyperbolic blend.
+// This seems to be the function that uses x_pivot, y_pivot and the hyperbolic/power terms.
+float equation_curve(float val, float p_low, float p_high) {
+    float x = val - x_pivot;
+    float y_shaped = equation_hyperbolic(x, p_low, p_high); // This applies the power curves and blends
+
+    // The original AgX.py `equation_curve` then scales this `y_shaped` value.
+    // `y_shaped_pivot = equation_hyperbolic(0.0, p_low, p_high)` (which is 0)
+    // `y_shaped_one = equation_hyperbolic(1.0 - x_pivot, p_low, p_high)`
+    // `y_shaped_zero = equation_hyperbolic(0.0 - x_pivot, p_low, p_high)`
+    //
+    // `a = (y_pivot - (y_pivot * slope_pivot * x_pivot)) / (y_shaped_pivot - (y_shaped_zero * (1.0 - slope_pivot)) - (y_shaped_pivot * slope_pivot * x_pivot))` --> This is complex.
+    // Let's look at `generate_config.py` `equation_curve` which is simpler:
+    // `y = lerp(y_low, y_high, smoothstep(0.0, 1.0, abs(x)))` where x = val - x_pivot
+    // This `y` is then returned. `equation_full_curve` then adds `y_pivot`.
+
+    // The subtask's `equation_scale` seems to be missing from the chain, or implied.
+    // `equation_full_curve` calls `equation_curve`.
+    // Let's assume `equation_curve` returns `y_shaped` and `equation_full_curve` handles the pivot addition.
+    return y_shaped;
+}
+
+// The `equation_scale` function from `AgX.py` is:
+// `def equation_scale(val, x_pivot, y_pivot, slope_pivot):`
+// `   return y_pivot + (val - x_pivot) * slope_pivot`
+// This is a linear scaling around the pivot. It's not immediately clear how this fits
+// with `equation_curve` and `equation_hyperbolic` as defined by the subtask structure,
+// as `equation_full_curve` already adds `y_pivot`.
+// The `slope_pivot` is used in `AgX.py` to adjust the `a` and `b` coefficients.
+// The provided `equation_full_curve` structure is:
+// `y = equation_curve(val, curve_power.x, curve_power.y)`
+// `return y + y_pivot`
+// This implies `equation_curve` should output something relative to 0 that then gets shifted by `y_pivot`.
+// The `slope_pivot` is not used in this simplified structure.
+
+// Let's re-evaluate `equation_curve` and `equation_full_curve` based on `generate_config.py`
+// `equation_curve(val, power, x_pivot)`:
+//    `x = val - x_pivot`
+//    `y_low = sign(x) * pow(abs(x), power.x)`
+//    `y_high = sign(x) * pow(abs(x), power.y)`
+//    `y = lerp(y_low, y_high, smoothstep(0.0, 1.0, abs(x)))`
+//    `return y`
+//
+// `equation_full_curve(val, power, x_pivot, y_pivot, slope_at_pivot)`:
+//    `y_curve = equation_curve(val, power, x_pivot)`
+//    `y_curve_at_pivot = equation_curve(x_pivot, power, x_pivot)` which is `equation_curve(0, power, x_pivot)` which is 0.
+//    `derivative_at_pivot = ...` (complex, involves `slope_at_pivot`)
+//    `# Scale and offset to pass through (x_pivot, y_pivot) with desired slope`
+//    `# Simplified: If derivative is 1 at pivot, y = y_curve + y_pivot`
+//    `return y_curve * gain + y_pivot` where gain makes derivative match `slope_at_pivot`.
+
+// The subtask's `equation_full_curve` is `y = equation_curve(...) + y_pivot`. This is the simplest form.
+// This means `equation_curve` must produce output such that when `val == x_pivot`, `equation_curve` returns `0`.
+// Our current `equation_curve(val, p_low, p_high)`:
+//    `x = val - x_pivot;`
+//    `y_shaped = equation_hyperbolic(x, p_low, p_high);` which uses `equation_term`.
+//    If `val == x_pivot`, then `x == 0`.
+//    `equation_term(0, p)` is `0`.
+//    `equation_hyperbolic(0, p_l, p_h)` is `lerp(0,0,...) = 0`.
+//    So `equation_curve(x_pivot, ...)` is `0`. This is correct for `y_curve + y_pivot`.
+
+// The `slope_pivot` is not used in the provided `equation_full_curve` structure.
+// The `equation_scale` function seems to be a separate utility or an alternative approach.
+// For this task, I will stick to the `equation_full_curve` structure given.
+
+float equation_full_curve(float val) {
+    // curve_power = float2(P_low, P_high)
+    float y_curve = equation_curve(val, curve_power.x, curve_power.y);
+    return y_curve + y_pivot;
+}
+
+
+// Main Pixel Shader Function
+float4 main(float2 texCoord : TEXCOORD0) : COLOR0 {
+    // 1. Sample screen color
+    float4 screen_color = tex2D(ScreenSampler, texCoord);
+    float3 linear_rgb = screen_color.rgb;
+
+    // 2. Apply agx_matrix
+    linear_rgb = mul(agx_matrix, linear_rgb);
+
+    // Clamp negative values that might result from matrix transformation if primaries are very wide,
+    // though with sRGB->Target (slightly wider than sRGB) this is less likely to produce significant negatives.
+    linear_rgb = max(float3(0.0, 0.0, 0.0), linear_rgb);
+
+    // 3. Convert each RGB channel to normalized log2 space
+    float r_log_norm = open_domain_to_normalized_log2(linear_rgb.r);
+    float g_log_norm = open_domain_to_normalized_log2(linear_rgb.g);
+    float b_log_norm = open_domain_to_normalized_log2(linear_rgb.b);
+
+    // 4. Apply equation_full_curve to each log-encoded channel
+    float r_curved = equation_full_curve(r_log_norm);
+    float g_curved = equation_full_curve(g_log_norm);
+    float b_curved = equation_full_curve(b_log_norm);
+
+    // 5. Convert each curved channel back to linear
+    float final_r = normalized_log2_to_open_domain(r_curved);
+    float final_g = normalized_log2_to_open_domain(g_curved);
+    float final_b = normalized_log2_to_open_domain(b_curved);
+
+    // 6. Return final RGB and original alpha
+    return float4(final_r, final_g, final_b, screen_color.a);
+}
